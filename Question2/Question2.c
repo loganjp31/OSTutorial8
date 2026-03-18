@@ -93,7 +93,7 @@ int main() {
         proc p;
         fscanf(file, "%s %d %d %d", p.name, &p.priority, &p.memory, &p.runtime);
         p.pid = 0;
-        p.address = 0;
+        p.address = -1;
         p.suspended = false;
 
         if (p.priority == 0) {
@@ -104,77 +104,70 @@ int main() {
     }
     fclose(file);
 
+
+    // Process priority queue first
     while(!isEmpty(&priority)) {
+
         proc p = pop(&priority);
         p.address = allocateMemory(memory, p.memory);
         if (p.address == -1) {
             printf("Memory allocation failed for process %s\n", p.name);
             continue;
         }
+
         p.pid = fork();
         if (p.pid == 0) {
             // Child process
-            sleep(p.runtime); // Simulate process execution
-            freeMemory(memory, p.address); // Free memory after execution
-            exit(0);
-        } else {
+            execl("./process", "process", NULL);
+        } 
+        else {
             // Parent process
             printf("Process %s is running with PID %d\n", p.name, p.pid);
+            sleep(p.runtime); // Simulate process execution
+            kill(p.pid, SIGTSTP); // Suspend the process after execution
+            waitpid(p.pid, NULL, 0); // Wait for the process to finish
+            freeMemory(memory, p.address); // Free memory after execution
         }
     }
 
 
+    // Process secondary queue next
+    while(!isEmpty(&secondary)) {
+        proc p = pop(&secondary);
+        p.address = allocateMemory(memory, p.memory);
+        if (p.address == -1) {
+            printf("Memory allocation failed for process %s\n", p.name);
+            continue;
+        }
 
-
-
-
-    char command[256];
-    while (1) {
-        printf("Enter command: ");
-        fgets(command, sizeof(command), stdin);
-        command[strcspn(command, "\n")] = 0; // Remove newline character
-
-        if (strcmp(command, "exit") == 0) {
-            break;
-        } else if (strcmp(command, "run") == 0) {
-            proc p;
-            printf("Enter process name: ");
-            fgets(p.name, sizeof(p.name), stdin);
-            p.name[strcspn(p.name, "\n")] = 0; // Remove newline character
-            printf("Enter process priority: ");
-            scanf("%d", &p.priority);
-            printf("Enter process memory requirement: ");
-            scanf("%d", &p.memory);
-            printf("Enter process runtime: ");
-            scanf("%d", &p.runtime);
-            getchar(); // Consume the newline character
-
-            p.address = allocateMemory(memory, p.memory);
-            if (p.address == -1) {
-                printf("Memory allocation failed for process %s\n", p.name);
-                continue;
-            }
+        if (!p.suspended) {
             p.pid = fork();
             if (p.pid == 0) {
                 // Child process
-                sleep(p.runtime); // Simulate process execution
-                freeMemory(memory, p.address); // Free memory after execution
-                exit(0);
-            } else {
-                // Parent process
-                push(&q, p); // Add process to the queue
-                printf("Process %s is running with PID %d\n", p.name, p.pid);
-            }
-        } else if (strcmp(command, "suspend") == 0) {
-            // Implement suspend functionality
-        } else if (strcmp(command, "resume") == 0) {
-            // Implement resume functionality
-        } else if (strcmp(command, "kill") == 0) {
-            // Implement kill functionality
-        } else {
-            printf("Unknown command\n");
+                execl("./process", "process", NULL);
+            } 
+        }
+        else {
+            // Parent process
+            kill(p.pid, SIGCONT); // Resume the suspended process
+        }
+        printf("Process %s is running with PID %d with runtime %d\n", p.name, p.pid, p.runtime);
+        sleep(1); // Simulate process execution
+
+        if(p.runtime == 1) {
+            kill(p.pid, SIGINT); // Kill the process after execution
+            waitpid(p.pid, NULL, 0); // Wait for the process to finish
+            freeMemory(memory, p.address); // Free memory after execution
+        }
+         else {
+            kill(p.pid, SIGTSTP); // Suspend the process after execution
+            p.runtime--; // Decrease runtime for the next iteration
+            p.suspended = true; // Mark the process as suspended
+            push(&secondary, p); // Push back to the secondary queue if it still has runtime left
         }
     }
+
     return 0;
+
 }
 
