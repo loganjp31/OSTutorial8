@@ -108,7 +108,7 @@ void print_tree(proc_tree *node, int depth) {
 }
 
 int main() {
-    FILE *file = fopen("processes_tree.txt", "r");  // match your actual filename
+    FILE *file = fopen("processes_tree.txt", "r");  // match actual filename
     if (!file) {
         printf("Error: Could not open processes_tree.txt\n");
         return 1;
