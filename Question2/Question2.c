@@ -1,4 +1,4 @@
-
+#define _POSIX_C_SOURCE 200809L
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -6,168 +6,301 @@
 #include <signal.h>
 #include <sys/wait.h>
 #include <stdbool.h>
+#include <errno.h>
+#include "queue.h"
 
 #define MEMORY 1024
 
+int avail_mem[MEMORY];
 
-typedef struct {
-    char name[256];
-    int priority;
-    int pid;
-    int address;
-    int memory;
-    int runtime;
-    bool suspended;
-} proc;
+void initialize_memory();
+int allocate_memory(int memory_needed);
+void free_memory(int address, int memory_needed);
+void execute_priority_processes(queue **priority_queue);
+void execute_secondary_processes(queue **secondary_queue);
+void read_processes_from_file(const char *filename, queue **priority_queue, queue **secondary_queue);
 
-typedef struct {
-    proc data;
-    struct node* next;
-} node;
+int main() {
+    queue *priority_queue = NULL;
+    queue *secondary_queue = NULL;
 
-typedef struct {
-    node* front;
-    node* rear;
-} queue;
+    initialize_memory();
 
+    read_processes_from_file("processes_q2.txt", &priority_queue, &secondary_queue);
 
-void push(queue* q, proc p) {
-    node* newNode = (node*)malloc(sizeof(node));
-    newNode->data = p;
-    newNode->next = NULL;
-    if (q->rear == NULL) {
-        q->front = q->rear = newNode;
-        return;
-    }
-    q->rear->next = newNode;
-    q->rear = newNode;
+    execute_priority_processes(&priority_queue);
+
+    execute_secondary_processes(&secondary_queue);
+
+    printf("All processes have been executed. Program terminating.\n");
+
+    return 0;
 }
 
-proc pop(queue* q) {
-    if (q->front == NULL) {
-        proc emptyProc;
-        memset(&emptyProc, 0, sizeof(proc));
-        return emptyProc; // Return an empty process if the queue is empty
+void initialize_memory() {
+    for (int i = 0; i < MEMORY; i++) {
+        avail_mem[i] = 0;
     }
-    node* temp = q->front;
-    proc p = temp->data;
-    q->front = q->front->next;
-    if (q->front == NULL) {
-        q->rear = NULL;
-    }
-    free(temp);
-    return p;
 }
 
-bool isEmpty(queue* q) {
-    return q->front == NULL;
-}
+int allocate_memory(int memory_needed) {
+    int start = -1;
+    int count = 0;
 
-int allocateMemory(int memory[], int size) {
-    for (int i = 0; i < size; i++) {
-        if (memory[i] == 0) {
-            memory[i] = 1; // Mark as allocated
-            return i; // Return the allocated memory address
+    for (int i = 0; i < MEMORY; i++) {
+        if (avail_mem[i] == 0) {
+            if (start == -1) {
+                start = i;
+            }
+            count++;
+            if (count == memory_needed) {
+                // Mark memory as used
+                for (int j = start; j < start + memory_needed; j++) {
+                    avail_mem[j] = 1;
+                }
+                return start;
+            }
+        } else {
+            start = -1;
+            count = 0;
         }
     }
+
     return -1; // No memory available
 }
 
-void freeMemory(int memory[], int address) {
+void free_memory(int address, int memory_needed) {
     if (address >= 0 && address < MEMORY) {
-        memory[address] = 0; // Mark as free
+        for (int i = address; i < address + memory_needed; i++) {
+            if (i < MEMORY) {
+                avail_mem[i] = 0;
+            }
+        }
     }
 }
 
-int main() {
-    queue priority = {NULL, NULL};
-    queue secondary = {NULL, NULL};
-    int memory[MEMORY] = {0}; // Memory management array
-
-    FILE* file = fopen("processes_q2.txt", "r");
-    if (file == NULL) {
-        perror("Failed to open processes_q2.txt");
-        return EXIT_FAILURE;
+void read_processes_from_file(const char *filename, queue **priority_queue, queue **secondary_queue) {
+    FILE *file = fopen(filename, "r");
+    if (!file) {
+        perror("Failed to open file");
+        exit(1);
     }
-    while(!feof(file)) {
+
+    char line[512];
+    while (fgets(line, sizeof(line), file)) {
         proc p;
-        fscanf(file, "%s %d %d %d", p.name, &p.priority, &p.memory, &p.runtime);
+        memset(&p, 0, sizeof(proc));
+
+        char name[256];
+        int priority, memory, runtime;
+
+        sscanf(line, "%255[^,],%d,%d,%d", name, &priority, &memory, &runtime);
+
+        strcpy(p.name, name);
+        p.priority = priority;
+        p.memory = memory;
+        p.runtime = runtime;
         p.pid = 0;
-        p.address = -1;
+        p.address = 0;
         p.suspended = false;
 
-        if (p.priority == 0) {
-            push(&priority, p);
+        // Add to appropriate queue
+        if (priority == 0) {
+            push(priority_queue, p);
         } else {
-            push(&secondary, p);
+            push(secondary_queue, p);
         }
     }
+
     fclose(file);
-
-
-    // Process priority queue first
-    while(!isEmpty(&priority)) {
-
-        proc p = pop(&priority);
-        p.address = allocateMemory(memory, p.memory);
-        if (p.address == -1) {
-            printf("Memory allocation failed for process %s\n", p.name);
-            continue;
-        }
-
-        p.pid = fork();
-        if (p.pid == 0) {
-            // Child process
-            execl("./process", "process", NULL);
-        } 
-        else {
-            // Parent process
-            printf("Process %s is running with PID %d\n", p.name, p.pid);
-            sleep(p.runtime); // Simulate process execution
-            kill(p.pid, SIGTSTP); // Suspend the process after execution
-            waitpid(p.pid, NULL, 0); // Wait for the process to finish
-            freeMemory(memory, p.address); // Free memory after execution
-        }
-    }
-
-
-    // Process secondary queue next
-    while(!isEmpty(&secondary)) {
-        proc p = pop(&secondary);
-        p.address = allocateMemory(memory, p.memory);
-        if (p.address == -1) {
-            printf("Memory allocation failed for process %s\n", p.name);
-            continue;
-        }
-
-        if (!p.suspended) {
-            p.pid = fork();
-            if (p.pid == 0) {
-                // Child process
-                execl("./process", "process", NULL);
-            } 
-        }
-        else {
-            // Parent process
-            kill(p.pid, SIGCONT); // Resume the suspended process
-        }
-        printf("Process %s is running with PID %d with runtime %d\n", p.name, p.pid, p.runtime);
-        sleep(1); // Simulate process execution
-
-        if(p.runtime == 1) {
-            kill(p.pid, SIGINT); // Kill the process after execution
-            waitpid(p.pid, NULL, 0); // Wait for the process to finish
-            freeMemory(memory, p.address); // Free memory after execution
-        }
-         else {
-            kill(p.pid, SIGTSTP); // Suspend the process after execution
-            p.runtime--; // Decrease runtime for the next iteration
-            p.suspended = true; // Mark the process as suspended
-            push(&secondary, p); // Push back to the secondary queue if it still has runtime left
-        }
-    }
-
-    return 0;
-
 }
 
+void execute_priority_processes(queue **priority_queue) {
+    proc *p;
+
+    while ((p = pop(priority_queue)) != NULL) {
+        // Allocate memory
+        p->address = allocate_memory(p->memory);
+        if (p->address == -1) {
+            fprintf(stderr, "Error: Not enough memory for process %s\n", p->name);
+            free(p);
+            continue;
+        }
+
+        // Fork and execute
+        pid_t pid = fork();
+
+        if (pid == 0) {
+            // Child process
+            char path[512];
+            snprintf(path, sizeof(path), "./%s.exe", p->name);
+            execl(path, path, NULL);
+            perror("exec failed");
+            exit(1);
+        } else if (pid > 0) {
+            // Parent process
+            p->pid = pid;
+
+            // Print process information
+            printf("Executing priority process: %s, Priority: %d, PID: %d, Memory: %d, Runtime: %d\n",
+                   p->name, p->priority, p->pid, p->memory, p->runtime);
+
+            // Run for specified runtime and then terminate
+            sleep(p->runtime);
+
+            kill(pid, SIGINT);
+
+            int status;
+            waitpid(pid, &status, 0);
+
+            free_memory(p->address, p->memory);
+
+            printf("Priority process %s completed and terminated.\n", p->name);
+        } else {
+            perror("fork failed");
+        }
+
+        free(p);
+    }
+}
+
+void execute_secondary_processes(queue **secondary_queue) {
+    proc *p;
+    bool process_remaining = true;
+
+    while (process_remaining) {
+        process_remaining = false;
+
+        // Check if there are any processes left in the queue
+        if (*secondary_queue != NULL) {
+            process_remaining = true;
+        }
+
+        p = pop(secondary_queue);
+        if (p == NULL) {
+            continue;
+        }
+
+        if (p->pid != 0 && p->suspended) {
+            // Check if process is still alive
+            if (kill(p->pid, 0) == -1 && errno == ESRCH) {
+                // Process no longer exists, clean up and continue
+                printf("Process %s no longer exists, cleaning up.\n", p->name);
+                free_memory(p->address, p->memory);
+                free(p);
+                continue;
+            }
+
+            // Resume suspended process - memory is already allocated
+            printf("Resuming secondary process: %s, Priority: %d, PID: %d, Memory: %d, Runtime: %d\n",
+                   p->name, p->priority, p->pid, p->memory, p->runtime);
+
+            kill(p->pid, SIGCONT);
+
+            // Run for 1 second and then suspend
+            sleep(1);
+            kill(p->pid, SIGTSTP);
+
+            // Decrement runtime
+            p->runtime--;
+
+            // Check if process is finished
+            if (p->runtime <= 0) {
+                // Terminate the process with SIGINT
+                kill(p->pid, SIGINT);
+
+                int status;
+                waitpid(p->pid, &status, 0);
+
+                free_memory(p->address, p->memory);
+
+                printf("Process %s completed and terminated.\n", p->name);
+                free(p);
+                continue;
+            }
+
+            p->suspended = true;
+
+            // Add back to queue
+            push(secondary_queue, *p);
+            free(p);
+        } else if (p->pid == 0) {
+            // New process - need to allocate memory
+            p->address = allocate_memory(p->memory);
+
+            if (p->address == -1) {
+                // Not enough memory, push back to queue
+                printf("Not enough memory for process %s, pushing back to queue\n", p->name);
+                push(secondary_queue, *p);
+                free(p);
+                continue;
+            }
+
+            if (p->runtime <= 1) {
+                pid_t pid = fork();
+
+                if (pid == 0) {
+                    // Child process
+                    char path[512];
+                    snprintf(path, sizeof(path), "./%s.exe", p->name);
+                    execl(path, path, NULL);
+                    perror("exec failed");
+                    exit(1);
+                } else if (pid > 0) {
+                    // Parent process
+                    p->pid = pid;
+
+                    printf("Executing secondary process (final): %s, Priority: %d, PID: %d, Memory: %d, Runtime: %d\n",
+                           p->name, p->priority, p->pid, p->memory, p->runtime);
+
+                    sleep(p->runtime);
+                    kill(pid, SIGINT);
+
+                    int status;
+                    waitpid(pid, &status, 0);
+
+                    free_memory(p->address, p->memory);
+
+                    printf("Process %s completed and terminated.\n", p->name);
+                    free(p);
+                } else {
+                    perror("fork failed");
+                    free(p);
+                }
+            } else {
+                pid_t pid = fork();
+
+                if (pid == 0) {
+                    // Child process
+                    char path[512];
+                    snprintf(path, sizeof(path), "./%s.exe", p->name);
+                    execl(path, path, NULL);
+                    perror("exec failed");
+                    exit(1);
+                } else if (pid > 0) {
+                    // Parent process
+                    p->pid = pid;
+
+                    printf("Executing secondary process: %s, Priority: %d, PID: %d, Memory: %d, Runtime: %d\n",
+                           p->name, p->priority, p->pid, p->memory, p->runtime);
+
+                    sleep(1);
+                    kill(pid, SIGTSTP);
+
+                    p->runtime--;
+
+                    p->suspended = true;
+
+                    push(secondary_queue, *p);
+                    free(p);
+                } else {
+                    perror("fork failed");
+                    free(p);
+                }
+            }
+        } else {
+            printf("Unexpected state for process %s\n", p->name);
+            free(p);
+        }
+    }
+}
